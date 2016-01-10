@@ -1,0 +1,142 @@
+//
+//  JSONCreatorFromMessage.m
+//  AtlassianTest
+//
+//  Created by Samuel Kitono on 6/01/2016.
+//  Copyright © 2016 Samuel Kitono. All rights reserved.
+//
+
+#import "JSONCreatorFromMessage.h"
+
+#define kMentionsDictionaryKey @"mentions"
+#define kEmoticonsDictionaryKey @"emoticons"
+#define kLinksDictionaryKey @"links"
+#define kURLDictionaryKey @"url"
+#define kTitleDictionaryKey @"title"
+
+
+@implementation JSONCreatorFromMessage
+
++(NSMutableArray *) createOrGetArrayFromDictionary:(NSMutableDictionary *) dictionary withKey:(NSString *) key{
+    
+    NSMutableArray * finalArray = dictionary[key];
+    if (finalArray == nil) {
+        finalArray = [NSMutableArray new];
+        dictionary[key] = finalArray;
+    }
+
+    return finalArray;
+}
+
++(NSString *) createJSONStringFromDictionary:(NSDictionary *) dictionary{
+    NSError *error;
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:dictionary
+                                                       options:0
+                                                         error:&error];
+    if (! jsonData) {
+        NSLog(@"Got an error: %@", error);
+        return nil;
+    }
+    
+    
+    NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSASCIIStringEncoding];
+    return jsonString;
+}
+
++(BOOL) validateStringAsURL:(NSString *) inputString{
+
+    NSUInteger length = [inputString length];
+    // Empty strings should return NO
+    if (length > 0) {
+        NSError *error = nil;
+        NSDataDetector *dataDetector = [NSDataDetector dataDetectorWithTypes:NSTextCheckingTypeLink error:&error];
+        if (dataDetector && !error) {
+            NSRange range = NSMakeRange(0, length);
+            NSRange notFoundRange = (NSRange){NSNotFound, 0};
+            NSRange linkRange = [dataDetector rangeOfFirstMatchInString:inputString options:0 range:range];
+            if (!NSEqualRanges(notFoundRange, linkRange) && NSEqualRanges(range, linkRange)) {
+                return YES;
+            }
+        }
+        else {
+            NSLog(@"Could not create link data detector: %@ %@", [error localizedDescription], [error userInfo]);
+        }
+    }
+    return NO;
+}
+
+//find title from the html string we find
++(NSString *) getTitleFromURL:(NSURL *) url{
+    NSString * htmlCode = [NSString stringWithContentsOfURL:url encoding:NSASCIIStringEncoding error:nil];
+    NSString * start = @"<title>";
+    NSRange range1 = [htmlCode rangeOfString:start];
+    
+    NSString * end = @"</title>";
+    NSRange range2 = [htmlCode rangeOfString:end];
+    
+    NSString * titleString = [htmlCode substringWithRange:NSMakeRange(range1.location + 7, range2.location - range1.location - 7)];
+    
+    return titleString;
+}
+
+
+//create dictionary object for each link encountered
++(NSDictionary *) createDictionaryForURLString:(NSString *) urlString{
+    
+    NSURL * url = nil;
+    if ([urlString hasPrefix:@"http://"] || [urlString hasPrefix:@"https://"]) {
+        url = [NSURL URLWithString:urlString];
+    }else{
+        url = [NSURL URLWithString:[NSString stringWithFormat:@"https://%@",urlString]];
+    }
+    
+    
+    NSMutableDictionary * linkDictionary = [NSMutableDictionary new];
+    linkDictionary[kURLDictionaryKey] = urlString;
+    linkDictionary[kTitleDictionaryKey] = [self getTitleFromURL:url];
+    return linkDictionary;
+}
+
+
+
++(NSString *) createJSONFromChatMessage:(NSString *) chatMessage{
+    
+    NSArray * wordArray = [chatMessage componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    //to make sure there is no blank character
+    wordArray = [wordArray filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF != ''"]];
+    
+    NSMutableDictionary * jsonFinalDictionary = [NSMutableDictionary new];
+    
+    for (NSString * word in wordArray) {
+        NSString * firstCharString = [word substringToIndex:1];
+        NSString * lastCharString = [word substringFromIndex:word.length-1];
+        
+        //now we check if it is mention or emoticons or links else we will do nothing
+        if ([firstCharString isEqualToString:@"@"]) {
+            NSString * mentionString = [word substringFromIndex:1];
+            if(mentionString.length){
+                NSMutableArray * mentionArray = [self createOrGetArrayFromDictionary:jsonFinalDictionary withKey:kMentionsDictionaryKey];
+                [mentionArray addObject:mentionString];
+            }
+        }else if ([firstCharString isEqualToString:@"("] && [lastCharString isEqualToString:@")"]){
+            NSString * emoticonString = [word substringWithRange:NSMakeRange(1, word.length-2)];
+            if (emoticonString.length) {
+                NSMutableArray * emoticonArray = [self createOrGetArrayFromDictionary:jsonFinalDictionary withKey:kEmoticonsDictionaryKey];
+                [emoticonArray addObject:emoticonString];
+            }
+        }else if ([self validateStringAsURL:word]){
+            NSMutableArray * linksArray = [self createOrGetArrayFromDictionary:jsonFinalDictionary withKey:kLinksDictionaryKey];
+            [linksArray addObject:[self createDictionaryForURLString:word]];
+        }
+    }
+    
+    //if there is nothing that can be parsed return nil
+    if (jsonFinalDictionary.allKeys.count == 0) {
+        return nil;
+    }
+    
+    
+    return [self createJSONStringFromDictionary:jsonFinalDictionary];
+}
+
+@end
