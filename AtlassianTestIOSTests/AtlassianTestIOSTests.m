@@ -49,15 +49,20 @@
         return NO;
     }
     
+    //We use set as it might be possible the order of the dictionary is not matching
+    NSMutableSet * setDictionary = [NSMutableSet new];
+    NSMutableSet * setMatchDictionary = [NSMutableSet new];
+    
     for (int i = 0; i < dictionaryArray.count; i++) {
         NSDictionary * dictionary = dictionaryArray[i];
         NSDictionary * matchDictionary = matchDictionaryArray[i];
-        if (![dictionary isEqualToDictionary:matchDictionary]) {
-            return NO;
-        }
+        [setDictionary addObject:dictionary];
+        [setMatchDictionary addObject:matchDictionary];
     }
     
-    return YES;
+    
+    
+    return [setDictionary isEqualToSet:setMatchDictionary];
 }
 
 -(void)testNull{
@@ -166,6 +171,43 @@
     XCTAssert(linkTest, @"Links Test");
 }
 
+-(void)testCompleteMessageAsync {
+    
+    XCTestExpectation *expectation = [self expectationWithDescription:@"JSON Parsing Expectations"];
+    
+    [JSONCreatorFromMessage createJSONFromChatMessage:@"@bob @john (success) such a cool feature; https://twitter.com/jdorfman/status/430511497475670016" withBlock:^(NSString * jsonMessage) {
+        
+        NSDictionary * jsonDictionary = [self createDictionaryFromJSON:jsonMessage];
+        
+        
+        NSArray * mentions = jsonDictionary[@"mentions"];
+        NSArray * emoticons = jsonDictionary[@"emoticons"];
+        NSArray * links = jsonDictionary[@"links"];
+        
+        BOOL mentionTest = [self assertStringArray:mentions withMatchStringArray:@[@"bob",@"john"]];
+        XCTAssert(mentionTest, @"Mention Test");
+        
+        BOOL emoticonTest = [self assertStringArray:emoticons withMatchStringArray:@[@"success"]];
+        XCTAssert(emoticonTest, @"Emoticon Test");
+        
+        NSArray * dictArray = @[@{
+                                    @"url":@"https://twitter.com/jdorfman/status/430511497475670016",
+                                    @"title":@"Justin Dorfman on Twitter: &quot;nice @littlebigdetail from @HipChat (shows hex colors when pasted in chat). http://t.co/7cI6Gjy5pq&quot;"
+                                    }];
+        
+        BOOL linkTest = [self assertDictionaryArray:links withMatchDictionaryArray:dictArray];
+        XCTAssert(linkTest, @"Links Test");
+        
+        [expectation fulfill];
+    }];
+
+    
+    [self waitForExpectationsWithTimeout:20.0 handler:^(NSError *error) {
+        if (error) {
+            NSLog(@"Timeout Error: %@", error);
+        }
+    }];
+}
 
 
 

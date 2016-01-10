@@ -15,6 +15,7 @@
 #define kTitleDictionaryKey @"title"
 
 
+
 @implementation JSONCreatorFromMessage
 
 +(NSMutableArray *) createOrGetArrayFromDictionary:(NSMutableDictionary *) dictionary withKey:(NSString *) key{
@@ -66,22 +67,35 @@
 }
 
 //find title from the html string we find
-+(NSString *) getTitleFromURL:(NSURL *) url{
-    NSString * htmlCode = [NSString stringWithContentsOfURL:url encoding:NSASCIIStringEncoding error:nil];
-    NSString * start = @"<title>";
-    NSRange range1 = [htmlCode rangeOfString:start];
++(void) getTitleFromURL:(NSURL *) url withCompletionBlock:(void (^)(NSError * error, NSString * titleString))completionBlock{
     
-    NSString * end = @"</title>";
-    NSRange range2 = [htmlCode rangeOfString:end];
-    
-    NSString * titleString = [htmlCode substringWithRange:NSMakeRange(range1.location + 7, range2.location - range1.location - 7)];
-    
-    return titleString;
+    NSURLSession *session = [NSURLSession sharedSession];
+    [[session dataTaskWithURL:url
+            completionHandler:^(NSData *data,
+                                NSURLResponse *response,
+                                NSError *error) {
+
+                NSString *htmlCode = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                NSString * start = @"<title>";
+                NSRange range1 = [htmlCode rangeOfString:start];
+                
+                NSString * end = @"</title>";
+                NSRange range2 = [htmlCode rangeOfString:end];
+                
+                NSString * titleString = [htmlCode substringWithRange:NSMakeRange(range1.location + 7, range2.location - range1.location - 7)];
+                
+                if (completionBlock) {
+                    completionBlock(error,titleString);
+                }
+            }] resume];
+
 }
 
 
 //create dictionary object for each link encountered
-+(NSDictionary *) createDictionaryForURLString:(NSString *) urlString{
++(void) createDictionaryForURLString:(NSString *) urlString withCompletionBlock:(void (^)(NSDictionary * dictionary)) completionBlock{
+    
+    
     
     NSURL * url = nil;
     if ([urlString hasPrefix:@"http://"] || [urlString hasPrefix:@"https://"]) {
@@ -91,21 +105,40 @@
     }
     
     
-    NSMutableDictionary * linkDictionary = [NSMutableDictionary new];
-    linkDictionary[kURLDictionaryKey] = urlString;
-    linkDictionary[kTitleDictionaryKey] = [self getTitleFromURL:url];
-    return linkDictionary;
+    
+    [self getTitleFromURL:url withCompletionBlock:^(NSError *error, NSString *titleString) {\
+        NSMutableDictionary * linkDictionary = [NSMutableDictionary new];
+        linkDictionary[kURLDictionaryKey] = urlString;
+        linkDictionary[kTitleDictionaryKey] = titleString;
+        if (error == nil) {
+            if (completionBlock) {
+                completionBlock(linkDictionary);
+            }
+        }else{
+            if (completionBlock) {
+                completionBlock(nil);
+            }
+        }
+    }];
 }
 
 
 
 +(NSString *) createJSONFromChatMessage:(NSString *) chatMessage{
     
+    dispatch_queue_t queue;
+    queue = dispatch_queue_create("com.Atlassian.MyQueue", NULL);
+
+    
     NSArray * wordArray = [chatMessage componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     //to make sure there is no blank character
     wordArray = [wordArray filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF != ''"]];
     
     NSMutableDictionary * jsonFinalDictionary = [NSMutableDictionary new];
+    
+    
+    int linkCount = 0;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     
     for (NSString * word in wordArray) {
         NSString * firstCharString = [word substringToIndex:1];
@@ -126,8 +159,22 @@
             }
         }else if ([self validateStringAsURL:word]){
             NSMutableArray * linksArray = [self createOrGetArrayFromDictionary:jsonFinalDictionary withKey:kLinksDictionaryKey];
-            [linksArray addObject:[self createDictionaryForURLString:word]];
+            linkCount++;
+            
+            //To speed up the link parsing process we use GCD blocks to get multiple request called at once
+            [self createDictionaryForURLString:word withCompletionBlock:^(NSDictionary * dictionary) {
+                //to make sure it is synchronized we use serial queue and semaphores
+                dispatch_barrier_async(queue, ^{
+                    [linksArray addObject:dictionary];
+                    dispatch_semaphore_signal(semaphore);
+                });
+            }];
         }
+    }
+    
+    //we wait for all dictionary to be created or wait for 20 secs till it fails
+    for (int i = 0; i < linkCount; i++) {
+        dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC));
     }
     
     //if there is nothing that can be parsed return nil
@@ -137,6 +184,18 @@
     
     
     return [self createJSONStringFromDictionary:jsonFinalDictionary];
+}
+
++(void) createJSONFromChatMessage:(NSString *)chatMessage withBlock:(finishParsingJSONBlock)finishBlock{
+    
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+    dispatch_async(queue, ^{
+        NSString * jsonMessage = [self createJSONFromChatMessage:chatMessage];
+        //to make sure this finishblock is executed at main queue
+        dispatch_async(dispatch_get_main_queue(), ^{
+            finishBlock(jsonMessage);
+        });
+    });
 }
 
 @end

@@ -8,8 +8,11 @@
 
 #import <Foundation/Foundation.h>
 
+typedef void(^finishParsingJSONBlock)(NSString *);
+
 @interface JSONCreatorFromMessage : NSObject
 
 +(NSString *) createJSONFromChatMessage:(NSString *) chatMessage;
++(void) createJSONFromChatMessage:(NSString *)chatMessage withBlock:(finishParsingJSONBlock)finishBlock;
 
 @end
